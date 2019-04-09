@@ -1,0 +1,81 @@
+FROM eosio/builder as builder
+ARG branch=master
+ARG symbol=SYS
+
+RUN apt-get update && apt-get install -y libcurl4-openssl-dev && apt-get install -y libusb-1.0-0-dev
+
+RUN git clone -b $branch https://github.com/EOSIO/eos.git --recursive \
+    && cd eos && echo "$branch:$(git rev-parse HEAD)" > /etc/eosio-version \
+    && cmake -H. -B"/tmp/build" -GNinja -DCMAKE_BUILD_TYPE=Release -DWASM_ROOT=/opt/wasm -DCMAKE_CXX_COMPILER=clang++ \
+       -DCMAKE_C_COMPILER=clang -DCMAKE_INSTALL_PREFIX=/tmp/build -DBUILD_MONGO_DB_PLUGIN=true -DCORE_SYMBOL_NAME=$symbol \
+    && cmake --build /tmp/build --target install
+
+FROM ubuntu:18.04
+
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y install openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /usr/local/lib/* /usr/local/lib/
+COPY --from=builder /tmp/build/bin /opt/eosio/bin
+COPY --from=builder /eos/Docker/config.ini /
+COPY --from=builder /etc/eosio-version /etc
+COPY --from=builder /eos/Docker/nodeosd.sh /opt/eosio/bin/nodeosd.sh
+COPY --from=builder /tmp/build /tmp/build/
+#COPY --from=builder /tmp/build/include/* /usr/local/eosio/include/
+#COPY --from=builder /tmp/build/lib/* /usr/local/eosio/lib/
+#RUN mkdir /usr/local/eosio/lib/cmake && mv /usr/local/eosio/lib/eosio /usr/local/eosio/lib/cmake/eosio
+ENV EOSIO_ROOT=/opt/eosio
+RUN chmod +x /opt/eosio/bin/nodeosd.sh
+ENV LD_LIBRARY_PATH /usr/local/lib
+ENV PATH /opt/eosio/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+
+# Get g++ for compiling, wget to download Boost, git to clone source code repo,
+# and make to automate program compilation with Makefile provided
+RUN apt-get update \
+  && apt-get install -y g++ \
+                        make \
+                        wget
+                        
+RUN wget https://dl.bintray.com/boostorg/release/1.67.0/source/boost_1_67_0.tar.bz2
+RUN tar --bzip2 -xf boost_1_67_0.tar.bz2
+
+
+RUN cd boost_1_67_0 && ./bootstrap.sh && ./b2 install
+
+RUN apt-get install -y lcov && apt-get install -y llvm
+
+RUN apt-get install -y cmake
+
+RUN wget https://github.com/EOSIO/eosio.cdt/releases/download/v1.4.1/eosio.cdt-1.4.1.x86_64.deb
+RUN apt-get install -y ./eosio.cdt-1.4.1.x86_64.deb
+
+RUN apt-get install -y clang-4.0 lldb-4.0 libssl-dev libgmp-dev
+
+RUN apt remove -y cmake
+
+RUN wget https://cmake.org/files/v3.13/cmake-3.13.4.tar.gz
+RUN tar -zxvf cmake-3.13.4.tar.gz
+
+RUN cd cmake-3.13.4 && ./bootstrap && make && make install
+
+RUN cmake --version
+
+RUN ln -s /opt/cmake-3.13.4/bin/* /usr/local/bin
+
+RUN apt-get install -y dos2unix
+
+RUN ln -s /usr/bin/clang-4.0 /usr/bin/clang && ln -s /usr/bin/clang++-4.0 /usr/bin/clang++
+
+RUN mkdir -p /eos/libraries/chain/include/eosio/chain && mkdir -p /eos/libraries/fc/include/fc \ 
+  && mkdir -p /eos/libraries/softfloat/source/include && mkdir -p /eos/libraries/appbase/include/appbase \
+  && mkdir -p /eos/libraries/chainbase/include/chainbase && mkdir -p /eos/libraries/testing/include/eosio/testing \
+  && mkdir -p /eos/libraries/wasm-jit/Include
+
+RUN cp -r /tmp/build/include/eosio/chain/* /eos/libraries/chain/include/eosio/chain/
+RUN cp -r /tmp/build/include/fc/* /eos/libraries/fc/include/fc/
+RUN cp -r /tmp/build/include/softfloat/* /eos/libraries/softfloat/source/include/
+RUN cp -r /tmp/build/include/appbase/* /eos/libraries/appbase/include/appbase/
+RUN cp -r /tmp/build/include/chainbase/* /eos/libraries/chainbase/include/chainbase/
+RUN cp -r /tmp/build/include/eosio/testing/* /eos/libraries/testing/include/eosio/testing/
+RUN cp -r /tmp/build/include/wasm-jit/* /eos/libraries/wasm-jit/Include/
+
+RUN apt-get install -y zlib1g-dev
